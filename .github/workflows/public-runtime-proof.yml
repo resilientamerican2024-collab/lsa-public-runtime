@@ -1,0 +1,37 @@
+name: public-runtime-proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prove public hosted execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVENT_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          mkdir -p proof
+          cat > proof/runtime-proof.txt <<EOF
+          proof_type=PUBLIC_RUNTIME_BOOTSTRAP
+          event_time_utc=$EVENT_TIME
+          provenance=github-actions/public-runtime-proof
+          repository=$GITHUB_REPOSITORY
+          run_id=$GITHUB_RUN_ID
+          run_attempt=$GITHUB_RUN_ATTEMPT
+          synthetic_test=true
+          private_lsa_data_accessed=false
+          secrets_required=false
+          verdict=EXECUTION_REACHED_RUNNER
+          EOF
+          cat proof/runtime-proof.txt
+      - name: Upload proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-runtime-proof
+          path: proof/runtime-proof.txt
+          retention-days: 7
