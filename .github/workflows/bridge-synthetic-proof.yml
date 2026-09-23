@@ -1,0 +1,63 @@
+name: bridge-synthetic-proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      commission_id:
+        description: "Synthetic commission ID"
+        required: true
+        default: "BRIDGE-SYNTHETIC-001"
+      payload:
+        description: "Public synthetic payload"
+        required: true
+        default: "lsa-bridge-round-trip"
+
+permissions:
+  contents: read
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validate and execute sanitized synthetic packet
+        shell: bash
+        env:
+          COMMISSION_ID: ${{ inputs.commission_id }}
+          PAYLOAD: ${{ inputs.payload }}
+        run: |
+          set -euo pipefail
+          case "$COMMISSION_ID" in
+            BRIDGE-SYNTHETIC-*) ;;
+            *) echo "Refusing non-synthetic commission in bridge proof" >&2; exit 2 ;;
+          esac
+          EVENT_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          INPUT_DIGEST="$(printf '%s' "$PAYLOAD" | shasum -a 256 | awk '{print $1}')"
+          OUTPUT="$(printf '%s' "$PAYLOAD" | tr '[:lower:]' '[:upper:]')"
+          OUTPUT_DIGEST="$(printf '%s' "$OUTPUT" | shasum -a 256 | awk '{print $1}')"
+          mkdir -p evidence
+          cat > evidence/return.json <<EOF
+          {
+            "schema_version": "0.1",
+            "commission_id": "$COMMISSION_ID",
+            "executed_at_utc": "$EVENT_TIME",
+            "runtime_provenance": "github-actions/lsa-public-runtime/bridge-synthetic-proof",
+            "run_id": "$GITHUB_RUN_ID",
+            "run_attempt": "$GITHUB_RUN_ATTEMPT",
+            "classification": "PUBLIC_SYNTHETIC_TEST",
+            "synthetic_test": true,
+            "private_lsa_data_accessed": false,
+            "secrets_required": false,
+            "input_digest_sha256": "$INPUT_DIGEST",
+            "output_digest_sha256": "$OUTPUT_DIGEST",
+            "output": "$OUTPUT",
+            "disposition": "UNVERIFIED_EXECUTION_OUTPUT"
+          }
+          EOF
+          cat evidence/return.json
+      - name: Upload unverified execution evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-synthetic-return
+          path: evidence/return.json
+          retention-days: 7
