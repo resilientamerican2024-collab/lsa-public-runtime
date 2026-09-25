@@ -1,0 +1,90 @@
+name: bridge-public-verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      commission_id:
+        description: "Public sanitized commission ID"
+        required: true
+      receipt_json:
+        description: "Sanitized execution receipt JSON"
+        required: true
+      expected_asset_sha256:
+        description: "Expected asset SHA-256"
+        required: true
+      expected_integration_id:
+        description: "Expected public integration identifier"
+        required: true
+      expected_scheduled_utc:
+        description: "Expected scheduled UTC timestamp"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validate sanitized execution receipt
+        shell: bash
+        env:
+          COMMISSION_ID: ${{ inputs.commission_id }}
+          RECEIPT_JSON: ${{ inputs.receipt_json }}
+          EXPECTED_ASSET_SHA256: ${{ inputs.expected_asset_sha256 }}
+          EXPECTED_INTEGRATION_ID: ${{ inputs.expected_integration_id }}
+          EXPECTED_SCHEDULED_UTC: ${{ inputs.expected_scheduled_utc }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          python3 - <<'PY'
+          import hashlib, json, os
+          from datetime import datetime, timezone
+          cid=os.environ["COMMISSION_ID"]
+          receipt=json.loads(os.environ["RECEIPT_JSON"])
+          expected={
+              "commission_id": cid,
+              "asset_sha256": os.environ["EXPECTED_ASSET_SHA256"],
+              "integration_id": os.environ["EXPECTED_INTEGRATION_ID"],
+              "scheduled_utc": os.environ["EXPECTED_SCHEDULED_UTC"],
+          }
+          checks={
+              key: receipt.get(key)==value
+              for key,value in expected.items()
+          }
+          checks["postiz_http_status_201"]=receipt.get("postiz_http_status")==201
+          checks["credential_exposed_false"]=receipt.get("credential_exposed") is False
+          checks["result_executed_with_receipt"]=receipt.get("result")=="EXECUTED_WITH_RECEIPT"
+          checks["runtime_provenance_present"]=bool(receipt.get("runtime_provenance"))
+          passed=all(checks.values())
+          canonical=json.dumps(receipt, sort_keys=True, separators=(",",":"))
+          output={
+              "schema_version":"0.1",
+              "commission_id":cid,
+              "executed_at_utc":datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "runtime_provenance":"github-actions/lsa-public-runtime/bridge-public-verify",
+              "run_id":os.environ["GITHUB_RUN_ID"],
+              "run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],
+              "classification":"PUBLIC_SANITIZED",
+              "synthetic_test":False,
+              "private_lsa_data_accessed":False,
+              "secrets_required":False,
+              "input_digest_sha256":hashlib.sha256(canonical.encode()).hexdigest(),
+              "checks":checks,
+              "output":{"deterministic_receipt_validation":"PASS" if passed else "FAIL"},
+              "disposition":"UNVERIFIED_EXECUTION_OUTPUT"
+          }
+          raw=json.dumps(output, indent=2, sort_keys=True)+"\n"
+          open("evidence/return.json","w").write(raw)
+          print(raw)
+          if not passed:
+              raise SystemExit(3)
+          PY
+      - name: Upload unverified execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-public-verify-return
+          path: evidence/return.json
+          retention-days: 7
